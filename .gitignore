@@ -1,0 +1,5 @@
+/target/
+/step_db/
+*.step
+*.stp
+output.json

@@ -1,0 +1,29 @@
+[package]
+name = "infinite_db_step"
+version = "0.1.0"
+edition = "2021"
+description = "Import STEP (ISO 10303-21) CAD files into InfiniteDB spatial records"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/joneseysinno/infinite-db-step"
+keywords = ["step", "cad", "infinite-db", "brep", "spatial"]
+categories = ["database-implementations", "science"]
+exclude = ["target/**", "step_db/**"]
+
+[lib]
+name = "infinite_db_step"
+path = "src/lib.rs"
+
+[features]
+default = []
+log = ["dep:log"]
+
+[dependencies]
+infinite-db = "0.1.5"
+bincode = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v5"] }
+log = { version = "0.4", optional = true }
