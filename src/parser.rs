@@ -39,7 +39,52 @@
 use std::collections::HashMap;
 use anyhow::{Result, anyhow, bail};
 use crate::geometry::*;
- 
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
+/// Collect DATA-section entity lines (one entity per line).
+fn collect_data_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_data = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "DATA;" {
+            in_data = true;
+            continue;
+        }
+        if line == "ENDSEC;" {
+            in_data = false;
+            continue;
+        }
+        if in_data && line.starts_with('#') {
+            lines.push(line.to_string());
+        }
+    }
+    lines
+}
+
+/// Parse the DATA section of a STEP file into raw entities.
+pub fn parse_raw(text: &str) -> Result<StepFile> {
+    let lines = collect_data_lines(text);
+
+    #[cfg(feature = "parallel")]
+    let entities: HashMap<u64, RawEntity> = lines
+        .par_iter()
+        .filter_map(|line| parse_entity_line(line))
+        .map(|e| (e.id, e))
+        .collect();
+
+    #[cfg(not(feature = "parallel"))]
+    let entities: HashMap<u64, RawEntity> = lines
+        .iter()
+        .filter_map(|line| parse_entity_line(line))
+        .map(|e| (e.id, e))
+        .collect();
+
+    Ok(StepFile { entities })
+}
+
 /// A raw, unparsed STEP entity.
 #[derive(Debug, Clone)]
 pub struct RawEntity {
@@ -48,31 +93,12 @@ pub struct RawEntity {
     /// The raw argument string inside the outermost parens.
     pub args: String,
 }
- 
+
 /// Parsed STEP file ready for entity resolution.
 pub struct StepFile {
     pub entities: HashMap<u64, RawEntity>,
 }
- 
-/// Parse the DATA section of a STEP file into raw entities.
-pub fn parse_raw(text: &str) -> Result<StepFile> {
-    let mut entities = HashMap::new();
-    let mut in_data = false;
- 
-    for line in text.lines() {
-        let line = line.trim();
-        if line == "DATA;" { in_data = true; continue; }
-        if line == "ENDSEC;" { in_data = false; continue; }
-        if !in_data || !line.starts_with('#') { continue; }
- 
-        if let Some(entity) = parse_entity_line(line) {
-            entities.insert(entity.id, entity);
-        }
-    }
- 
-    Ok(StepFile { entities })
-}
- 
+
 /// Parse a single entity line like `#12 = CARTESIAN_POINT('',( 0.0,0.0,0.0));`
 fn parse_entity_line(line: &str) -> Option<RawEntity> {
     // Strip trailing semicolon
@@ -212,63 +238,129 @@ impl<'a> EntityResolver<'a> {
  
     fn build_model(&self) -> Result<GeometryModel> {
         let mut model = GeometryModel::new();
- 
-        // Collect raw entity names for diagnostics
+
         for (id, e) in self.entities {
             model.entities.insert(*id, e.type_name.clone());
         }
- 
-        // Resolve vertices (VERTEX_POINT)
-        for (id, e) in self.entities {
-            if e.type_name == "VERTEX_POINT" {
-                if let Ok(v) = self.resolve_vertex(*id) {
+
+        let vertex_ids: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.type_name == "VERTEX_POINT")
+            .map(|(id, _)| *id)
+            .collect();
+
+        #[cfg(feature = "parallel")]
+        {
+            model.vertices = vertex_ids
+                .par_iter()
+                .filter_map(|id| self.resolve_vertex(*id).ok())
+                .collect();
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for id in vertex_ids {
+                if let Ok(v) = self.resolve_vertex(id) {
                     model.vertices.push(v);
                 }
             }
         }
- 
-        // Resolve edges (EDGE_CURVE)
-        for (id, e) in self.entities {
-            if e.type_name == "EDGE_CURVE" {
-                if let Ok(edge) = self.resolve_edge(*id, &model) {
+        model.rebuild_vertex_index();
+
+        let edge_ids: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.type_name == "EDGE_CURVE")
+            .map(|(id, _)| *id)
+            .collect();
+
+        #[cfg(feature = "parallel")]
+        {
+            model.edges = edge_ids
+                .par_iter()
+                .filter_map(|id| self.resolve_edge(*id, &model).ok())
+                .collect();
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for id in edge_ids {
+                if let Ok(edge) = self.resolve_edge(id, &model) {
                     model.edges.push(edge);
                 }
             }
         }
- 
-        // Resolve faces (ADVANCED_FACE)
-        for (id, e) in self.entities {
-            if e.type_name == "ADVANCED_FACE" {
-                if let Ok(face) = self.resolve_face(*id, &model) {
+        model.rebuild_edge_index();
+
+        let face_ids: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.type_name == "ADVANCED_FACE")
+            .map(|(id, _)| *id)
+            .collect();
+
+        #[cfg(feature = "parallel")]
+        {
+            model.faces = face_ids
+                .par_iter()
+                .filter_map(|id| self.resolve_face(*id, &model).ok())
+                .collect();
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for id in face_ids {
+                if let Ok(face) = self.resolve_face(id, &model) {
                     model.faces.push(face);
                 }
             }
         }
- 
-        // Resolve shells
-        let mut shell_id_counter = 0u64;
-        for (id, e) in self.entities {
-            let is_shell = matches!(
-                e.type_name.as_str(),
-                "CLOSED_SHELL" | "OPEN_SHELL" | "SHELL_BASED_SURFACE_MODEL"
-            );
-            if is_shell {
-                if let Ok(shell) = self.resolve_shell(*id, &model, &mut shell_id_counter) {
+        model.rebuild_face_index();
+
+        let shell_ids: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                matches!(
+                    e.type_name.as_str(),
+                    "CLOSED_SHELL" | "OPEN_SHELL" | "SHELL_BASED_SURFACE_MODEL"
+                )
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        #[cfg(feature = "parallel")]
+        {
+            model.shells = shell_ids
+                .par_iter()
+                .filter_map(|id| {
+                    let mut counter = 0u64;
+                    self.resolve_shell(*id, &model, &mut counter).ok()
+                })
+                .collect();
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut shell_id_counter = 0u64;
+            for id in shell_ids {
+                if let Ok(shell) = self.resolve_shell(id, &model, &mut shell_id_counter) {
                     model.shells.push(shell);
                 }
             }
         }
- 
-        // Resolve solids (MANIFOLD_SOLID_BREP)
-        for (id, e) in self.entities {
-            if e.type_name == "MANIFOLD_SOLID_BREP" {
-                if let Ok(solid) = self.resolve_solid(*id, &model) {
-                    model.solids.push(solid);
-                }
+        model.rebuild_shell_index();
+
+        let solid_ids: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.type_name == "MANIFOLD_SOLID_BREP")
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in solid_ids {
+            if let Ok(solid) = self.resolve_solid(id, &model) {
+                model.solids.push(solid);
             }
         }
- 
-        // If no solids found but we have shells, synthesize a top-level solid
+
         if model.solids.is_empty() && !model.shells.is_empty() {
             let shell_ids: Vec<u64> = model.shells.iter().map(|s| s.id).collect();
             let all_centroids: Vec<Point3> = model.shells.iter().map(|s| s.centroid).collect();
@@ -284,7 +376,7 @@ impl<'a> EntityResolver<'a> {
                 volume_estimate: 0.0,
             });
         }
- 
+
         Ok(model)
     }
  
@@ -552,7 +644,7 @@ impl<'a> EntityResolver<'a> {
         // Compute centroid from boundary vertices
         let mut boundary_pts: Vec<Point3> = Vec::new();
         for eid in &edge_ids {
-            if let Some(edge) = model.edges.iter().find(|e| e.id == *eid) {
+            if let Some(edge) = model.edge(*eid) {
                 boundary_pts.push(edge.midpoint);
             }
         }
@@ -659,8 +751,9 @@ impl<'a> EntityResolver<'a> {
             }
         }
  
-        let centroids: Vec<Point3> = face_ids.iter()
-            .filter_map(|fid| model.faces.iter().find(|f| f.id == *fid))
+        let centroids: Vec<Point3> = face_ids
+            .iter()
+            .filter_map(|fid| model.face(*fid))
             .map(|f| f.centroid)
             .collect();
  

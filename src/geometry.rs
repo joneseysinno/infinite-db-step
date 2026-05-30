@@ -226,20 +226,67 @@ pub struct Solid {
 pub struct GeometryModel {
     /// Raw entity count from the STEP DATA section.
     pub entities: HashMap<u64, String>,
- 
+
     pub vertices: Vec<Vertex>,
-    pub edges:    Vec<Edge>,
-    pub faces:    Vec<Face>,
-    pub shells:   Vec<Shell>,
-    pub solids:   Vec<Solid>,
+    pub edges: Vec<Edge>,
+    pub faces: Vec<Face>,
+    pub shells: Vec<Shell>,
+    pub solids: Vec<Solid>,
+
+    /// O(1) lookup tables rebuilt after each resolution phase.
+    #[serde(skip)]
+    pub vertex_by_id: HashMap<u64, Vertex>,
+    #[serde(skip)]
+    pub edge_by_id: HashMap<u64, Edge>,
+    #[serde(skip)]
+    pub face_by_id: HashMap<u64, Face>,
+    #[serde(skip)]
+    pub shell_by_id: HashMap<u64, Shell>,
 }
- 
+
 impl GeometryModel {
-    pub fn new() -> Self { Self::default() }
- 
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Rebuild vertex lookup map from `vertices`.
+    pub fn rebuild_vertex_index(&mut self) {
+        self.vertex_by_id = self.vertices.iter().map(|v| (v.id, v.clone())).collect();
+    }
+
+    /// Rebuild edge lookup map from `edges`.
+    pub fn rebuild_edge_index(&mut self) {
+        self.edge_by_id = self.edges.iter().map(|e| (e.id, e.clone())).collect();
+    }
+
+    /// Rebuild face lookup map from `faces`.
+    pub fn rebuild_face_index(&mut self) {
+        self.face_by_id = self.faces.iter().map(|f| (f.id, f.clone())).collect();
+    }
+
+    /// Rebuild shell lookup map from `shells`.
+    pub fn rebuild_shell_index(&mut self) {
+        self.shell_by_id = self.shells.iter().map(|s| (s.id, s.clone())).collect();
+    }
+
     /// Look up a vertex by ID.
     pub fn vertex(&self, id: u64) -> Option<&Vertex> {
-        self.vertices.iter().find(|v| v.id == id)
+        self.vertex_by_id.get(&id)
+    }
+
+    /// Look up an edge by ID.
+    pub fn edge(&self, id: u64) -> Option<&Edge> {
+        self.edge_by_id.get(&id)
+    }
+
+    /// Look up a face by ID.
+    pub fn face(&self, id: u64) -> Option<&Face> {
+        self.face_by_id.get(&id)
+    }
+
+    /// Look up a shell by ID.
+    pub fn shell(&self, id: u64) -> Option<&Shell> {
+        self.shell_by_id.get(&id)
     }
  
     /// Compute the axis-aligned bounding box of all vertices.

@@ -6,17 +6,40 @@ Import [STEP](https://en.wikipedia.org/wiki/ISO_10303-21) (ISO 10303-21) CAD fil
 
 ```toml
 [dependencies]
-infinite_db_step = "0.1"
-infinite-db = "0.1"
+infinite_db_step = "0.2"
+infinite-db = "0.2"
 ```
 
 Optional progress and per-entity logging:
 
 ```toml
-infinite_db_step = { version = "0.1", features = ["log"] }
+infinite_db_step = { version = "0.2", features = ["log"] }
+```
+
+Parallel STEP parsing and encoding are enabled by default. To disable:
+
+```toml
+infinite_db_step = { version = "0.2", default-features = false }
 ```
 
 Initialize a logger in your binary (for example `env_logger`) when using the `log` feature.
+
+## Command-line import
+
+Build and run the `import-step` binary:
+
+```text
+cargo run --bin import-step -- model.step ./my_database
+cargo run --bin import-step -- model.step ./my_database --json dump.json
+```
+
+Or run an ignored integration test with environment variables:
+
+```text
+STEP_FILE=model.step DB_DIR=./my_database cargo test --test import_step_file -- --ignored --nocapture
+```
+
+Optional `JSON_DUMP=./dump.json` writes a JSON sidecar.
 
 ## Example
 

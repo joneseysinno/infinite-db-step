@@ -3,3 +3,4 @@
 *.step
 *.stp
 output.json
+/my_database/
